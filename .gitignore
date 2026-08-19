@@ -1,0 +1,14 @@
+# Godot 4+ specific ignores
+.godot/
+*.translation
+
+# Build artifacts
+build/
+export/
+*.pck
+*.wasm
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+*.tmp
