@@ -115,9 +115,13 @@ var pedestrians: Array[Dictionary] = []
 var aircraft: Array[Dictionary] = []
 var plane_strobe_mat: StandardMaterial3D
 var moon_node: MeshInstance3D
+var car_probe: ReflectionProbe = null
+var touch_layer: CanvasLayer = null
+var _touched := false   # follows the car; true neon reflections (works in all renderers)
 var light_mode := true
 var sky_mat: ProceduralSkyMaterial
 var world_env: Environment
+var _render_tier := 2   # 0 low, 1 medium, 2 AAA (SDFGI+SSAO+MSAA+SDF reflections)
 var main_dir_light: DirectionalLight3D
 var fill_dir_light: DirectionalLight3D
 var building_materials: Array[StandardMaterial3D] = []
@@ -177,6 +181,7 @@ func _ready() -> void:
 	_build_fx()
 	_build_cops()
 	_build_hud()
+	_build_touch_controls()
 	_build_audio()
 	_load_best()
 	_reset_race()
@@ -209,11 +214,17 @@ func _process(delta: float) -> void:
 		_reset_race()
 
 	if Input.is_key_pressed(KEY_F1):
+		_render_tier = 0
 		get_viewport().scaling_3d_scale = 0.5
+		_apply_render_tier()
 	elif Input.is_key_pressed(KEY_F2):
+		_render_tier = 1
 		get_viewport().scaling_3d_scale = 0.65
+		_apply_render_tier()
 	elif Input.is_key_pressed(KEY_F3):
+		_render_tier = 2
 		get_viewport().scaling_3d_scale = 1.0
+		_apply_render_tier()
 
 	if not paused:
 		_update_race(delta)
@@ -1193,6 +1204,11 @@ func _build_city_ground() -> void:
 		ground_mat.albedo_texture = _noise_texture()
 		ground_mat.uv1_scale = Vector3(90, 90, 1)
 	ground_mat.roughness = 0.85
+
+	if ResourceLoader.exists("res://textures/normal_brick.png"):
+		ground_mat.normal_enabled = true
+		ground_mat.normal_texture = load("res://textures/normal_brick.png")
+		ground_mat.normal_scale = 0.35
 	var ground_mesh := PlaneMesh.new()
 	ground_mesh.size = Vector2(CITY_SPAN + 320.0, CITY_SPAN + 320.0)
 	var ground := MeshInstance3D.new()
@@ -1211,6 +1227,13 @@ func _build_city_ground() -> void:
 		road_mat.uv1_scale = Vector3(1.2, 72.0, 1)
 	road_mat.metallic = 0.35
 	road_mat.roughness = 0.22
+
+	if ResourceLoader.exists("res://textures/ice_normal.jpg"):
+		road_mat.normal_enabled = true
+		road_mat.normal_texture = load("res://textures/ice_normal.jpg")
+		road_mat.normal_scale = 0.4
+	if ResourceLoader.exists("res://textures/ice_roughness.jpg"):
+		road_mat.roughness_texture = load("res://textures/ice_roughness.jpg")
 	road_mat.rim_enabled = true
 	road_mat.rim = 0.25
 	var road_mesh := PlaneMesh.new()
@@ -1228,6 +1251,13 @@ func _build_city_ground() -> void:
 		sidewalk_mat.albedo_texture = _noise_texture()
 		sidewalk_mat.uv1_scale = Vector3(1.5, 72.0, 1)
 	sidewalk_mat.roughness = 0.68
+
+	if ResourceLoader.exists("res://textures/normal_brick.png"):
+		sidewalk_mat.normal_enabled = true
+		sidewalk_mat.normal_texture = load("res://textures/normal_brick.png")
+		sidewalk_mat.normal_scale = 0.5
+	if ResourceLoader.exists("res://textures/brick_roughness.jpg"):
+		sidewalk_mat.roughness_texture = load("res://textures/brick_roughness.jpg")
 	var walk_mesh := PlaneMesh.new()
 	walk_mesh.size = Vector2(9.6, CITY_SPAN)
 	var walk_v := _city_multimesh(walk_mesh, sidewalk_mat, CITY_ROAD_COUNT * 2)
@@ -1329,6 +1359,7 @@ func _build_environment() -> void:
 	add_child(fill_dir_light)
 
 	_apply_lighting_mode()
+	_apply_render_tier()
 
 	camera = Camera3D.new()
 	camera.fov = 64.0
@@ -1411,6 +1442,58 @@ func _apply_lighting_mode() -> void:
 			mat.emission_energy_multiplier = 1.20
 
 
+
+
+# AAA render tier: SDFGI global illumination + SSAO/SSIL + SDF screen-space reflections.
+# VoxelGI is intentionally NOT used - it is unsupported on the Web renderer and would
+# silently drop all GI on the Vercel/browser build. SDFGI works in WebGL and fits a
+# single open city better (no voxel grid to cover).
+func _apply_render_tier() -> void:
+	if world_env == null:
+		return
+	# Renderer gate: SDFGI / SSR / SSIL need Forward+ (WebGL2). They are silently
+	# inert on the Compatibility renderer (this project targets it for universal
+	# WebGL1 / weak-iGPU browsers), so we only set them when a real GI renderer is
+	# present. SSAO and ReflectionProbe work on ALL renderers and do the heavy
+	# lifting here (contact shadows + true neon reflections on wet asphalt / car).
+	var method: String = RenderingServer.get_current_rendering_method().to_lower()
+	var gi_capable: bool = method.find("forward") != -1 or method.find("mobile") != -1
+	# --- SDFGI global illumination (Forward+/Mobile only) ---
+	world_env.sdfgi_enabled = gi_capable and _render_tier >= 1
+	if world_env.sdfgi_enabled:
+		world_env.sdfgi_use_occlusion = true
+		world_env.sdfgi_read_sky_light = true
+		world_env.sdfgi_min_cell_size = 0.25
+		world_env.sdfgi_max_distance = 200.0
+		world_env.sdfgi_energy = 1.0
+		world_env.sdfgi_bounce_feedback = 0.35
+		world_env.sdfgi_normal_bias = 0.15
+	# --- SDF screen-space reflections (Forward+/Mobile only) ---
+	world_env.ssr_enabled = gi_capable and _render_tier >= 1
+	if world_env.ssr_enabled:
+		world_env.ssr_max_steps = 64
+		world_env.ssr_fade_in = 0.1
+		world_env.ssr_fade_out = 0.6
+	# --- SSIL soft-light falloff (Forward+/Mobile only) ---
+	world_env.ssil_enabled = gi_capable and _render_tier >= 1
+	if world_env.ssil_enabled:
+		world_env.ssil_intensity = 0.5
+		world_env.ssil_radius = 0.8
+		world_env.ssil_sharpness = 0.5
+	# --- SSAO contact shadows: works on every renderer, biggest realism win ---
+	world_env.ssao_enabled = _render_tier >= 1
+	if world_env.ssao_enabled:
+		world_env.ssao_radius = 1.2
+		world_env.ssao_intensity = 1.4
+		world_env.ssao_power = 1.0
+		world_env.ssao_detail = 0.9
+		world_env.ssao_horizon = 0.10
+		world_env.ssao_sharpness = 0.6
+	# Car-following reflection probe: real neon reflections on wet asphalt / glossy car
+	if car_probe != null:
+		car_probe.visible = _render_tier >= 1
+	# --- MSAA: 4x on AAA tier, 2x on lower tiers for the iGPU ---
+	get_viewport().msaa_3d = Viewport.MSAA_4X if _render_tier >= 2 else Viewport.MSAA_2X
 func _noise_texture() -> ImageTexture:
 	var img := Image.create_empty(256, 256, false, Image.FORMAT_RGB8)
 	for y in range(256):
@@ -1506,6 +1589,11 @@ func _prepare_building_materials(windows: ImageTexture) -> void:
 			mat.uv1_scale = Vector3(2.0, 4.0, 1.0)
 		mat.metallic = 0.35 if kind != 2 else 0.85
 		mat.roughness = 0.40 if kind != 2 else 0.12
+
+		if ResourceLoader.exists("res://textures/normal_brick.png"):
+			mat.normal_enabled = true
+			mat.normal_texture = load("res://textures/normal_brick.png")
+			mat.normal_scale = 0.3
 		mat.emission_enabled = true
 		mat.emission_texture = facade_tex if facade_tex != null else windows
 		mat.emission_energy_multiplier = 0.95 if kind == 2 else 1.30
@@ -2320,6 +2408,10 @@ func _build_car() -> void:
 	carbon_mat.metallic = 0.92
 	carbon_mat.roughness = 0.18
 
+	if ResourceLoader.exists("res://textures/carbon_normal.png"):
+		carbon_mat.normal_enabled = true
+		carbon_mat.normal_texture = load("res://textures/carbon_normal.png")
+		carbon_mat.normal_scale = 0.5
 	# Front Aero Splitter (-Z)
 	var splitter := MeshInstance3D.new()
 	var spm := BoxMesh.new()
@@ -2384,6 +2476,19 @@ func _build_car() -> void:
 	headlight.rotation_degrees = Vector3(-6, 0, 0)
 	car.add_child(headlight)
 
+	# Reflection probe parented to the car: reflects the neon skyline onto the
+	# wet asphalt and glossy body. Works on Compatibility (WebGL1) AND Forward+/Mobile.
+	car_probe = ReflectionProbe.new()
+	car_probe.position = Vector3(0, 6.0, 0)
+	car_probe.size = Vector3(128, 128, 128)   # cube-map resolution
+	car_probe.max_distance = 80.0   # world-space reflection radius
+	car_probe.cull_mask = 0xFFFFFFFF
+	car_probe.intensity = 1.0
+	car_probe.blend_distance = 30.0   # fade probe reflection over distance
+	car_probe.update_mode = ReflectionProbe.UPDATE_ONCE
+	car_probe.visible = false
+	car.add_child(car_probe)
+
 
 func _build_cops() -> void:
 	cop_light_a = StandardMaterial3D.new()
@@ -2438,6 +2543,124 @@ func _build_cops() -> void:
 		cops.append({"node": node, "active": false, "speed": 0.0})
 
 
+
+
+# ---------------- Mobile / touch controls (auto-appear on first touch) ----------------
+func _build_touch_controls() -> void:
+	var catcher := Control.new()
+	catcher.set_anchors_preset(Control.PRESET_FULL_RECT)
+	catcher.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	catcher.gui_input.connect(_on_touch_catcher_input)
+	add_child(catcher)
+
+	touch_layer = CanvasLayer.new()
+	touch_layer.layer = 10
+	touch_layer.visible = false
+	add_child(touch_layer)
+
+	var root := Control.new()
+	root.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	touch_layer.add_child(root)
+
+	_touch_btn(root, "L", Vector2(24, -170), 96, "steer_left", false)
+	_touch_btn(root, "R", Vector2(132, -170), 96, "steer_right", false)
+	_touch_btn(root, "B", Vector2(-108, -92), 88, "brake", true)
+	_touch_btn(root, "G", Vector2(-200, -188), 104, "accelerate", true)
+	_touch_btn(root, "N", Vector2(-108, -188), 84, "boost", true)
+	_touch_btn(root, "H", Vector2(-200, -92), 84, "handbrake", true)
+
+	var util := Control.new()
+	util.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	util.position = Vector2(-150, 10)
+	util.size = Vector2(150, 150)
+	touch_layer.add_child(util)
+	_touch_util_btn(util, "CAM", Vector2(0, 0), 42)
+	_touch_util_btn(util, "LUX", Vector2(70, 0), 42)
+	_touch_util_btn(util, "PAUSE", Vector2(0, 52), 42)
+	_touch_util_btn(util, "RESET", Vector2(70, 52), 42)
+
+
+func _on_touch_catcher_input(event: InputEvent) -> void:
+	var touch := event is InputEventScreenTouch or event is InputEventScreenDrag
+	var mb := event as InputEventMouseButton
+	var tap := mb != null and mb.pressed
+	if (touch or tap) and not _touched:
+		_touched = true
+		if touch_layer != null:
+			touch_layer.visible = true
+		_set_center("TOUCH: L/R steer, G gas, B brake, N nitro, H handbrake", 2.0)
+
+
+func _touch_btn(parent: Control, text: String, pos: Vector2, px: int, action: String, right: bool) -> Control:
+	var b := Button.new()
+	b.text = text
+	b.position = pos
+	b.custom_minimum_size = Vector2(px, px)
+	b.size = Vector2(px, px)
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", int(px * 0.30))
+	var base := Color(0.03, 0.05, 0.10, 0.55) if not right else Color(0.10, 0.02, 0.04, 0.55)
+	var edge := Color(0.30, 0.90, 1.00, 0.55) if not right else Color(1.00, 0.50, 0.20, 0.55)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = base
+	sb.border_color = edge
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(int(px * 0.18))
+	b.add_theme_stylebox_override("normal", sb)
+	var sp := StyleBoxFlat.new()
+	sp.bg_color = base.lerp(Color(0.35, 0.80, 1.00, 1.0), 0.4) if not right else base.lerp(Color(1.0, 0.45, 0.15, 1.0), 0.4)
+	sp.border_color = edge
+	sp.set_border_width_all(2)
+	sp.set_corner_radius_all(int(px * 0.18))
+	b.add_theme_stylebox_override("pressed", sp)
+	parent.add_child(b)
+	b.button_down.connect(func() -> void: Input.action_press(action))
+	b.button_up.connect(func() -> void: Input.action_release(action))
+	b.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventScreenTouch and not ev.pressed:
+			Input.action_release(action)
+	)
+	return b
+
+
+func _touch_util_btn(parent: Control, text: String, pos: Vector2, px: int) -> Control:
+	var b := Button.new()
+	b.text = text
+	b.position = pos
+	b.custom_minimum_size = Vector2(px + 14, px * 0.66)
+	b.size = Vector2(px + 14, px * 0.66)
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 12)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.02, 0.03, 0.06, 0.5)
+	sb.border_color = Color(0.6, 0.7, 0.9, 0.35)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(6)
+	b.add_theme_stylebox_override("normal", sb)
+	parent.add_child(b)
+	if text == "CAM":
+		b.pressed.connect(func() -> void:
+			camera_mode = "hood" if camera_mode == "chase" else "chase"
+			_set_center("CAMERA: " + camera_mode.to_upper(), 0.8)
+		)
+	elif text == "LUX":
+		b.pressed.connect(func() -> void:
+			light_mode = not light_mode
+			_apply_lighting_mode()
+			_set_center("LIGHTING: " + ("DAY" if light_mode else "NIGHT"), 1.0)
+		)
+	elif text == "PAUSE":
+		b.pressed.connect(func() -> void:
+			paused = not paused
+			get_tree().paused = paused
+			if hud_center != null:
+				hud_center.text = "PAUSED" if paused else ""
+		)
+	elif text == "RESET":
+		b.pressed.connect(func() -> void:
+			_reset_race()
+		)
+	return b
 func _build_hud() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
