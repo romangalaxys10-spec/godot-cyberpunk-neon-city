@@ -154,6 +154,7 @@ var pursuit_bar: ColorRect
 var pursuit_panel: ColorRect
 var flash_rect: ColorRect
 var speed_tint: ColorRect
+var vignette_tex: Texture2D = null
 
 # Audio
 var audio_player: AudioStreamPlayer
@@ -1384,10 +1385,10 @@ func _apply_lighting_mode() -> void:
 		world_env.ambient_light_energy = 0.92
 		world_env.tonemap_exposure = 1.06
 		world_env.fog_light_color = Color(0.70, 0.78, 0.88)
-		world_env.fog_density = 0.0018
+		world_env.fog_density = 0.0014
 		world_env.fog_sky_affect = 0.25
-		world_env.glow_intensity = 0.30
-		world_env.glow_bloom = 0.03
+		world_env.glow_intensity = 0.45
+		world_env.glow_bloom = 0.08
 
 		main_dir_light.rotation_degrees = Vector3(-50, 38, 0)
 		main_dir_light.light_color = Color(1.0, 0.97, 0.90)
@@ -1420,8 +1421,8 @@ func _apply_lighting_mode() -> void:
 		world_env.fog_light_color = Color(0.20, 0.14, 0.24)
 		world_env.fog_density = 0.0042
 		world_env.fog_sky_affect = 0.40
-		world_env.glow_intensity = 0.92
-		world_env.glow_bloom = 0.12
+		world_env.glow_intensity = 1.35
+		world_env.glow_bloom = 0.24
 
 		main_dir_light.rotation_degrees = Vector3(-42, 35, 0)
 		main_dir_light.light_color = Color(0.65, 0.74, 1.0)
@@ -2549,7 +2550,7 @@ func _build_cops() -> void:
 func _build_touch_controls() -> void:
 	var catcher := Control.new()
 	catcher.set_anchors_preset(Control.PRESET_FULL_RECT)
-	catcher.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	catcher.mouse_filter = Control.MOUSE_FILTER_PASS  # receives its own touch, passes the rest through
 	catcher.gui_input.connect(_on_touch_catcher_input)
 	add_child(catcher)
 
@@ -2666,6 +2667,28 @@ func _build_hud() -> void:
 	add_child(canvas)
 
 	flash_rect = ColorRect.new()
+	# Cinematic vignette: subtle radial edge darkening for focus + mood (near-zero cost).
+	if vignette_tex == null:
+		var img := Image.create_empty(512, 512, false, Image.FORMAT_RGBA8)
+		for y in range(512):
+			for x in range(512):
+				var nx := (x - 255.0) / 255.0
+				var ny := (y - 255.0) / 255.0
+				var d := minf(sqrt(nx*nx + ny*ny) * 1.12, 1.0)
+				var a := clampf(pow(d, 1.7) * 0.55, 0.0, 0.85)
+				img.set_pixel(x, y, Color(0.01, 0.012, 0.02, a))
+		vignette_tex = ImageTexture.create_from_image(img)
+	var vig := CanvasLayer.new()
+	vig.layer = 5
+	add_child(vig)
+	var vr := TextureRect.new()
+	vr.texture = vignette_tex
+	vr.stretch_mode = TextureRect.STRETCH_SCALE
+	vr.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vig.add_child(vr)
+	
+
 	flash_rect.color = Color(1, 1, 1, 0)
 	flash_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	flash_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
