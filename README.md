@@ -18,9 +18,11 @@ Play the game instantly with WebGL/WebAssembly:
 ## 📖 Architectural Thesis: Neuro-Symbolic Game Engineering with GLM-5.3 & Gemini 3.7
 
 ### 1. Abstract
-The rapid evolution of Large Language Models (LLMs) and Multimodal Visual AI has opened unprecedented paradigms in autonomous game development. This project serves as a practical demonstration of **dual-model neuro-symbolic game synthesis**, where deep architectural reasoning, real-time procedural physics engines, and GPU-level render pipelines are co-designed and implemented using:
-- **GLM-5.3**: Serving as the primary **System Architect & Logic Engine** for core GDScript algorithmic systems, multi-body kinematics, spatial partitioning, Ackermann steering curves, and multi-mesh instance management.
-- **Gemini 3.7 (Vision & Multimodal Intelligence)**: Serving as the **Visual & Material Director**, guiding PBR texture synthesis, normal/roughness map formulations, atmospheric scattering coefficients, and ACES Filmic color-grading curves.
+This project is a case study in AI-assisted game engineering. To be precise about what happened here:
+- **GLM-5.3 did almost all the work.** It produced the entire 2,400+ line `main.gd` — the 3.6 km procedural city, the 4-wheel driving model, pedestrian/traffic/police AI, weather, the HUD, procedural audio, and the WASM export — **and it wrote the initial procedural texture generators** (asphalt, facade windows, sidewalks, carbon fiber, foliage).
+- **Gemini 3.7 Flash had one focused job:** it took GLM-5.3's generated textures and enhanced their visual look (PBR parameter tuning, normal/roughness response, color grading). It wrote **no** game logic, no city generation, no gameplay code — it only made the materials read better under the lighting GLM had already designed.
+
+In short: one model built the city and everything in it; the other made the asphalt prettier.
 
 ---
 
@@ -35,11 +37,11 @@ The rapid evolution of Large Language Models (LLMs) and Multimodal Visual AI has
                        ┌────────────────────────┴────────────────────────┐
                        ▼                                                 ▼
         ┌──────────────────────────────┐                  ┌──────────────────────────────┐
-        │       GLM-5.3 Architecture   │                  │     Gemini 3.7 Visual Intel  │
-        │ - Procedural 3.6km City Grid │                  │ - PBR Texture Parameter Gen │
-        │ - 4-Wheel Physics & Drifting │                  │ - ACES Filmic Color Grading  │
-        │ - Animated Pedestrian Agents │                  │ - Atmospheric Fog & Lighting │
-        │ - Dynamic Traffic Pathing    │                  │ - High-Poly Car Styling      │
+        │   GLM-5.3 — ALMOST ALL WORK  │                  │  Gemini 3.7 Flash — Texture  │
+        │ - Procedural 3.6km City Grid │                  │   enhancement (applied to    │
+        │ - 4-Wheel Physics & Drifting │                  │   GLM's generated output)   │
+        │ - Animated Pedestrian Agents │                  │ - PBR parameter tuning      │
+        │ - Dynamic Traffic Pathing    │                  │ - Color grading / roughness │
         └──────────────┬───────────────┘                  └──────────────┬───────────────┘
                        │                                                 │
                        └────────────────────────┬────────────────────────┘
@@ -68,13 +70,22 @@ A continuous **3.6 km urban grid** divided into distinct architectural districts
 #### B. Realistic Vehicle Kinematics & Ackermann Steering
 Unlike arcade-style physics, the driving model computes:
 - Dynamic weight transfer (brake dive and acceleration squat).
-- Progressive speed-dependent steering dampening with Ackermann low-speed authority.
+- Progressive speed-dependent steering dampening and speed-sensitive lock for a natural, modern-feel turn.
 - Realistic lateral tire slip, drift angles, and counter-steering recovery.
 - Multi-component wheels consisting of rubber treads, alloy rims, illuminated cyber hubs, and static brake calipers with rolling wheel physics.
 
 #### C. Autonomous Pedestrians & Urban Traffic
-- **Pedestrian Simulation**: Multi-jointed human agents with natural walking kinematics, diverse skin tones, procedural wardrobe colors, and collision-aware sidewalk roaming.
-- **Multi-Lane Traffic**: Autonomous civilian sedans and SUVs traversing intersection networks with functioning headlights and taillights.
+- **Pedestrian Simulation**: Multi-jointed human agents with natural walking kinematics, diverse skin tones, procedural wardrobe colors, collision response (knockdown + heat spike), and flee behavior when the car approaches fast.
+- **Multi-Lane Traffic**: Autonomous civilian sedans and SUVs with headlights/taillights, **rear-end collision response**, and **follow-braking** so cars no longer pass through each other at junctions.
+- **Police Pursuit**: Heading-relative intercept points so cops cut you off (instead of overshooting), all-direction spawning, and escalating heat.
+
+#### E. v1.1 Feel & Visuals
+- **Curbs are felt**: crossing a road edge now jolts the car (vertical impulse + damping) instead of stopping silently.
+- **Skid marks** are laid on the asphalt during handbrake drifts (pooled, recycled quads).
+- **Rooftop aviation beacons** pulse across the skyline at night.
+- **Damage smoke** rises from the engine bay above 50% damage and intensifies toward wreck.
+- **Recycled lamp light pools** project warm light onto the asphalt at night (a handful of shared omni lights track the nearest fixtures).
+- **Day/Night consistency**: rain, clouds, stars and moon are now hidden in Daylight mode so the bright sky stays clean.
 
 #### D. Dynamic Lighting: Day & Night Cycles
 - Real-time atmospheric switching between **Daylight Mode** (high-altitude sun, skybox fill, specular asphalt reflections) and **Cyberpunk Night Mode** (deep volumetric fog, vibrant neon underglow, and high dynamic range bloom).
@@ -126,9 +137,20 @@ godot --headless --export-release "Web" build/web/index.html
 
 ## 📜 Credits & Acknowledgments
 - **Core Engine**: Godot Engine 4.7
-- **AI Architecture & Code Synthesis**: GLM-5.3
-- **Vision & Aesthetic Guidance**: Gemini 3.7
+- **Builder (almost all work)**: GLM-5.3 — full `main.gd`, physics, AI, weather, HUD, audio, WASM export, and the initial procedural texture generators
+- **Texture enhancement only**: Gemini 3.7 Flash — refined the look of GLM's generated textures (PBR parameters, color grading). No game logic.
 - **Hosting**: Vercel Edge Network
+
+## 📣 Share / Hashtags
+**Primary set (for a post):**
+`#GLM53 #GodotEngine #GameDevelopment #GenerativeAI #ZAI #AICoding #OpenSource #IndieGameDev #LLM #ProceduralGeneration`
+
+**Extended set (more reach):**
+`#GameDev #NeonCity #Cyberpunk #WebAssembly #CodeGeneration #DevTools #TechInnovation #AIAssisted #Gaming #SoftwareEngineering`
+
+**LinkedIn sweet spot (3–5):** `#GLM53 #GodotEngine #GameDevelopment #GenerativeAI #OpenSource`
+
+> **Play it live in your browser** — pin the link in any post: https://godot-cyberpunk-city.vercel.app
 
 ---
 

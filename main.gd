@@ -86,9 +86,26 @@ var lamp_head_mm: MultiMesh
 var rain_mm: MultiMesh
 var cloud_mm: MultiMesh
 var star_mm: MultiMesh
+var star_holder_node: MultiMeshInstance3D
 var cloud_offsets: Array[Vector3] = []
 var star_offsets: Array[Vector3] = []
 var tree_trunk_mm: MultiMesh
+var rain_holder_node: MultiMeshInstance3D
+var cloud_holder_node: MultiMeshInstance3D
+
+# v1.1 FX state
+var lamp_lights: Array[OmniLight3D] = []
+var skid_pool: Array[MeshInstance3D] = []
+var skid_index := 0
+var skid_timer := 0.0
+var beacon_mm: MultiMesh
+var smoke_pool: Array[MeshInstance3D] = []
+var smoke_timer := 0.0
+var smoke_alpha := 0.0
+var smoke_age: Array[float] = []
+var smoke_base: Array[Vector3] = []
+var curb_jolt := 0.0
+var curb_cool := 0.0
 var tree_canopy_mm: MultiMesh
 var pedestrian_body_mm: MultiMesh
 var pedestrian_head_mm: MultiMesh
@@ -157,6 +174,7 @@ func _ready() -> void:
 	_build_environment()
 	_build_car()
 	_build_world()
+	_build_fx()
 	_build_cops()
 	_build_hud()
 	_build_audio()
@@ -201,6 +219,7 @@ func _process(delta: float) -> void:
 		_update_race(delta)
 		_update_world(delta)
 		_update_weather(delta)
+		_update_fx(delta)
 
 	_update_hud()
 	_audio_process()
@@ -266,16 +285,6 @@ func _reset_race() -> void:
 func _update_race(delta: float) -> void:
 	if race_state == "countdown":
 		countdown -= delta
-		var input_kick := (
-			Input.is_action_pressed("accelerate") or Input.is_action_pressed("brake") or
-			Input.is_action_pressed("steer_left") or Input.is_action_pressed("steer_right") or
-			Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_A) or
-			Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_D) or
-			Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_DOWN) or
-			Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_RIGHT)
-		)
-		if input_kick:
-			countdown = 0.0
 		var n := int(ceil(countdown))
 		hud_center.text = str(n) if n > 0 else "GO!"
 		if countdown <= 0.0:
@@ -446,17 +455,32 @@ func _update_race(delta: float) -> void:
 		var dx: float = t.x - car.position.x
 		var along := dz if t.axis == "z" else dx
 		var across := dx if t.axis == "z" else dz
+		var car_pos := Vector3(car.position.x, 0.5, car.position.z)
+		var rel_vec := car_pos - Vector3(t.x, 0.5, t.z)
+		if rel_vec.length() < 0.001:
+			rel_vec = Vector3(0.02, 0.0, 0.02)
+		var nudge := rel_vec.normalized()
 		if absf(along) < 2.6 and absf(across) < 1.7:
 			var rel: float = vf - t.dir * t.speed
 			if rel > 0.0:
 				vf = lerpf(vf, t.speed * 0.5, 0.5)
 				if t.axis == "z":
-					t.z += t.dir * 6.0
+					t.z += nudge.z * 7.5
 				else:
-					t.x += t.dir * 6.0
+					t.x += nudge.x * 7.5
 				_apply_damage(4.0)
 				_add_shake(0.7)
 				impact_env = 1.0
+			elif rel < 0.0 and absf(rel) > 2.0:
+				# Rear-end: a faster traffic car hits the player from behind
+				vf = lerpf(vf, t.dir * t.speed * 0.62, 0.5)
+				_apply_damage(3.2 + absf(rel) * 0.05)
+				_add_shake(0.6)
+				impact_env = 1.0
+				if t.axis == "z":
+					t.z -= nudge.z * 6.0
+				else:
+					t.x -= nudge.x * 6.0
 			vel = fwd * vf + right * vr
 		elif absf(along) < 5.0 and absf(across) < 2.6 and absf(vf) > 22.0:
 			var key := str(i)
@@ -523,6 +547,8 @@ func _constrain_car_to_city(old_pos: Vector3) -> bool:
 		_apply_damage(hit_speed * 0.22)
 		_add_shake(clampf(hit_speed / 34.0, 0.25, 0.8))
 		impact_env = maxf(impact_env, clampf(hit_speed / 28.0, 0.2, 1.0))
+		# Curb bump: vertical jolt so the wall is felt, not just a silent stop
+		curb_jolt = maxf(curb_jolt, clampf(hit_speed * 0.006, 0.03, 0.22))
 	return true
 
 
@@ -608,7 +634,10 @@ func _update_police(delta: float, player_speed: float) -> void:
 		if not cop.active:
 			continue
 		var node: Node3D = cop.node
-		var target := car.position + Vector3(sin(yaw) * 8.0, 0, 14.0)
+		# Intercept point ahead of the player in the player's travel direction,
+		# so cops cut off the road instead of overshooting behind the car.
+		var cop_fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+		var target := car.position + cop_fwd * 11.0
 		var dir := (target - node.position)
 		dir.y = 0.0
 		dir = dir.normalized()
@@ -676,9 +705,12 @@ func _spawn_cops(count: int) -> void:
 		cop.active = true
 		cop.node.visible = true
 		cop.speed = 20.0
+		var spawn_angle := rng.randf_range(0.0, TAU)
+		var spawn_off := Vector3(cos(spawn_angle) * (55.0 + rng.randf() * 30.0), 0.0, sin(spawn_angle) * (55.0 + rng.randf() * 30.0))
 		cop.node.position = car.position + Vector3(
-			rng.randf_range(-3.5, 3.5), 0, 55.0 + rng.randf() * 30.0
+			spawn_off.x, 0, spawn_off.z
 		)
+		_constrain_cop_to_city(cop.node)
 		spawned += 1
 
 
@@ -695,7 +727,8 @@ func _update_car_visual(delta: float) -> void:
 	suspension_bounce = lerpf(suspension_bounce, road_vibe, 12.0 * delta)
 
 	car.rotation = Vector3(body_pitch, yaw, body_roll)
-	car_body.position.y = 0.42 + suspension_bounce
+	car_body.position.y = 0.42 + suspension_bounce + curb_jolt
+	curb_jolt = lerpf(curb_jolt, 0.0, 16.0 * delta)
 
 	# Front wheels steering angle animation
 	for pivot in front_wheel_pivots:
@@ -743,6 +776,7 @@ func _recycle_traffic(index: int, initial := false) -> void:
 	t.axis = axis
 	t.dir = direction
 	t.speed = rng.randf_range(8.0, 19.0)
+	t.base_speed = t.speed
 	if axis == "z":
 		var road := clampi(
 			_nearest_road_index(car.position.x) + rng.randi_range(-3, 3),
@@ -771,6 +805,7 @@ func _recycle_pedestrian(index: int, initial := false) -> void:
 	person.axis = axis
 	person.dir = direction
 	person.speed = rng.randf_range(0.9, 2.1)
+	person.down = -999.0
 	if axis == "z":
 		var road := clampi(
 			_nearest_road_index(car.position.x) + rng.randi_range(-2, 2),
@@ -838,6 +873,21 @@ func _update_world(delta: float) -> void:
 
 	for i in range(TRAFFIC_COUNT):
 		var t := traffic[i]
+		# Follow-braking: slow down for cars ahead on the same corridor so
+		# cross-traffic no longer passes through each other at junctions.
+		var braked := false
+		for j in range(i + 1, TRAFFIC_COUNT):
+			var o := traffic[j]
+			if o.axis != t.axis:
+				continue
+			var gap: float = (o.z - t.z) * t.dir if t.axis == "z" else (o.x - t.x) * t.dir
+			if gap > 0.0 and gap < 10.0 and absf((o.x if t.axis == "x" else o.z) - (t.x if t.axis == "x" else t.z)) < 1.8:
+				braked = true
+				break
+		if braked:
+			t.speed = minf(t.speed, 4.5)
+		else:
+			t.speed = move_toward(t.speed, t.base_speed, 12.0 * delta)
 		if t.axis == "z":
 			t.z += t.dir * t.speed * delta
 		else:
@@ -858,18 +908,50 @@ func _update_world(delta: float) -> void:
 		)
 
 	# Sidewalk crowds: realistic humanoid bodies, heads, animated legs and swinging arms
+	var car_speed_now := vel.length()
 	for i in range(PEDESTRIAN_COUNT):
 		var person := pedestrians[i]
-		if person.axis == "z":
-			person.z += person.speed * person.dir * delta
+		var pdx: float = person.x - car.position.x
+		var pdz: float = person.z - car.position.z
+		var pdist := Vector2(pdx, pdz).length()
+		var down_for := maxf(0.0, elapsed - person.down)
+		if down_for >= 3.5:
+			# Walking: flee briefly if the car is close and fast
+			var target_speed := rng.randf_range(0.9, 2.1) * (2.6 if (pdist < 12.0 and car_speed_now > 14.0) else 1.0)
+			person.speed = move_toward(person.speed, target_speed, 3.0 * delta)
+			if person.axis == "z":
+				person.z += person.speed * person.dir * delta
+			else:
+				person.x += person.speed * person.dir * delta
 		else:
-			person.x += person.speed * person.dir * delta
+			person.speed = 0.0
+		if down_for < 3.5 and pdist < 1.7 and car_speed_now > 8.0:
+			# Pedestrian struck: knockdown, damage, and a big heat spike
+			person.down = elapsed
+			_apply_damage(7.0)
+			_add_shake(1.0)
+			impact_env = 1.0
+			if race_state == "racing":
+				if heat < 3:
+					heat += 2
+				_set_center("PED STRUCK - HEAT %d" % heat, 1.2)
 		if maxf(absf(person.x - car.position.x), absf(person.z - car.position.z)) > 155.0:
 			_recycle_pedestrian(i)
-		var walk_phase: float = person.phase + elapsed * person.speed * 2.4
-		var bob := absf(sin(walk_phase)) * 0.045
 		var facing := _travel_basis(person.axis, person.dir)
 		var center := Vector3(person.x, 0.0, person.z)
+		if down_for < 3.5:
+			# Lying on the ground for 3.5 s, then gets back up
+			var lay_basis := Basis(Vector3.UP, person.phase) * Basis(Vector3(1, 0, 0), PI * 0.5)
+			var lpos := center + Vector3(0.0, 0.26, 0.0) + facing * Vector3(0.0, 0.0, -0.2)
+			pedestrian_body_mm.set_instance_transform(i, Transform3D(lay_basis, lpos))
+			pedestrian_head_mm.set_instance_transform(i, Transform3D(lay_basis, lpos + lay_basis * Vector3(0.0, 0.0, 0.45)))
+			pedestrian_leg_mm.set_instance_transform(i * 2, Transform3D(lay_basis, lpos + lay_basis * Vector3(0.0, 0.0, -0.12)))
+			pedestrian_leg_mm.set_instance_transform(i * 2 + 1, Transform3D(lay_basis, lpos + lay_basis * Vector3(0.0, 0.0, -0.12)))
+			pedestrian_arm_mm.set_instance_transform(i * 2, Transform3D(lay_basis, lpos + lay_basis * Vector3(0.0, 0.0, 0.12)))
+			pedestrian_arm_mm.set_instance_transform(i * 2 + 1, Transform3D(lay_basis, lpos + lay_basis * Vector3(0.0, 0.0, 0.12)))
+			continue
+		var walk_phase: float = person.phase + elapsed * person.speed * 2.4
+		var bob := absf(sin(walk_phase)) * 0.045
 		pedestrian_body_mm.set_instance_transform(
 			i, Transform3D(facing, center + Vector3(0.0, 0.98 + bob, 0.0))
 		)
@@ -914,6 +996,16 @@ func _update_world(delta: float) -> void:
 	plane_strobe_mat.emission_energy_multiplier = 5.0 if strobe < 0.12 or strobe > 0.42 and strobe < 0.50 else 0.15
 
 	# Night sky follows the camera; clouds drift slowly without extra draw calls
+	if light_mode:
+		star_holder_node.visible = false
+		cloud_holder_node.visible = false
+		moon_node.visible = false
+		rain_holder_node.visible = false
+	else:
+		star_holder_node.visible = true
+		cloud_holder_node.visible = true
+		moon_node.visible = true
+		rain_holder_node.visible = true
 	for i in range(CLOUD_COUNT):
 		var offset := cloud_offsets[i]
 		var x := wrapf(offset.x + elapsed * 1.15, -280.0, 280.0)
@@ -996,6 +1088,88 @@ func _update_weather(delta: float) -> void:
 	if thunder_env > 0.0:
 		thunder_env = maxf(0.0, thunder_env - 0.65 * delta)
 
+
+func _update_fx(delta: float) -> void:
+	var night := not light_mode
+
+	# Lamp pools: recycle a small set of omni lights onto the nearest lamp heads.
+	var best: Array = []
+	for i in range(POLE_COUNT):
+		var ix := clampi(_nearest_road_index(car.position.x) + (i % 5) - 2 + (i / 25) * 3, 0, CITY_ROAD_COUNT - 1)
+		var iz := clampi(_nearest_road_index(car.position.z) + ((i / 5) % 5) - 2 + (i / 50) * 3, 0, CITY_ROAD_COUNT - 1)
+		var side := -1.0 if i % 2 == 0 else 1.0
+		var p := Vector3(_road_center(ix) + side * 6.2, 0.0, _road_center(iz))
+		if i % 3 == 0:
+			p = Vector3(_road_center(ix), 0.0, _road_center(iz) + side * 6.2)
+		var d := p.distance_to(car.position)
+		if d < 240.0:
+			best.append([d, p])
+	best.sort_custom(func(a, b): return a[0] < b[0])
+	for k in range(lamp_lights.size()):
+		var omni: OmniLight3D = lamp_lights[k]
+		if k < best.size():
+			omni.visible = true
+			omni.position = Vector3(best[k][1].x, 4.1, best[k][1].z)
+			omni.light_energy = 2.6 if night else 0.25
+		else:
+			omni.visible = false
+
+	# Skid marks: lay dark quads under the rear wheels while drifting.
+	skid_timer -= delta
+	if race_state == "racing" and skid_level > 0.42 and vel.length() > 4.0 and skid_timer <= 0.0:
+		skid_timer = 0.02
+		var skid_fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+		var skid_right := Vector3(-skid_fwd.z, 0.0, skid_fwd.x)
+		for side_f in [-1.0, 1.0]:
+			var side: float = side_f
+			var mi: MeshInstance3D = skid_pool[skid_index]
+			var p := car.position - skid_fwd * 1.35 + skid_right * (side * 0.75)
+			mi.position = Vector3(p.x, 0.02, p.z)
+			mi.rotation = Vector3(0.0, yaw, 0.0)
+			mi.visible = true
+			skid_index = (skid_index + 1) % skid_pool.size()
+
+	# Rooftop beacons: slow red pulse, strong at night, faint by day.
+	var beacon_blink := 0.25 + 0.75 * absf(sin(elapsed * 2.2))
+	var beacon_mat: StandardMaterial3D = beacon_mm.mesh.material
+	if beacon_mat != null and beacon_mat.emission_enabled:
+		beacon_mat.emission_energy_multiplier = (2.2 if night else 0.35) * beacon_blink
+
+	# Damage smoke: rising, expanding, fading quads above 50% damage.
+	smoke_alpha = lerpf(smoke_alpha, clampf((damage - 50.0) / 50.0, 0.0, 1.0) * 0.7, 6.0 * delta)
+	smoke_timer -= delta
+	var want_smoke := damage > 50.0
+	if want_smoke and smoke_timer <= 0.0:
+		smoke_timer = 0.12
+		var smoke_fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+		var sel := (skid_index + int(elapsed * 8)) % smoke_pool.size()
+		var mi: MeshInstance3D = smoke_pool[sel]
+		var spawn := car.position + smoke_fwd * 1.4 + Vector3(rng.randf_range(-0.3, 0.3), 0.9, rng.randf_range(-0.3, 0.3))
+		mi.position = spawn
+		var s := 0.6 + smoke_alpha
+		mi.scale = Vector3(s, s, s)
+		mi.visible = true
+		smoke_age[sel] = 0.0
+		smoke_base[sel] = spawn
+		var smoke_mat: StandardMaterial3D = mi.mesh.material
+		if smoke_mat != null:
+			smoke_mat.albedo_color.a = smoke_alpha
+	# Animate existing smoke instances: rise, expand, fade over 2.2 s.
+	for idx in range(smoke_pool.size()):
+		var node: MeshInstance3D = smoke_pool[idx]
+		if not node.visible:
+			continue
+		smoke_age[idx] += delta
+		var life_t := smoke_age[idx] / 2.2
+		if life_t >= 1.0:
+			node.visible = false
+			continue
+		node.position = smoke_base[idx] + Vector3(rng.randf_range(-0.05, 0.05), life_t * 2.4, rng.randf_range(-0.05, 0.05))
+		var grow := 0.5 + life_t * 1.9
+		node.scale = Vector3(grow, grow, grow)
+		var sm: StandardMaterial3D = node.material_override
+		if sm != null:
+			sm.albedo_color.a = smoke_alpha * (1.0 - life_t)
 
 func _city_multimesh(mesh: PlaneMesh, material: Material, count: int) -> MultiMesh:
 	var mm := MultiMesh.new()
@@ -1428,7 +1602,7 @@ func _build_world() -> void:
 	for i in range(TRAFFIC_COUNT):
 		traffic.append({
 			"x": 0.0, "z": 0.0, "axis": "z", "dir": -1.0,
-			"speed": rng.randf_range(8.0, 19.0)
+			"speed": rng.randf_range(8.0, 19.0), "base_speed": 12.0
 		})
 	_spawn_traffic()
 	_build_pedestrians()
@@ -1515,6 +1689,7 @@ func _build_world() -> void:
 	var rain_holder := MultiMeshInstance3D.new()
 	rain_holder.multimesh = rain_mm
 	add_child(rain_holder)
+	rain_holder_node = rain_holder
 	rain_ox.resize(RAIN_COUNT)
 	rain_oz.resize(RAIN_COUNT)
 	rain_y0.resize(RAIN_COUNT)
@@ -1522,6 +1697,89 @@ func _build_world() -> void:
 		rain_ox[i] = rng.randf_range(-22.0, 22.0)
 		rain_oz[i] = rng.randf_range(-26.0, 26.0)
 		rain_y0[i] = rng.randf_range(0.0, 30.0)
+
+
+func _build_fx() -> void:
+	# --- Recycled lamp pools: a handful of real omni lights track the lamps
+	# nearest the car so street lighting actually lands on the asphalt.
+	lamp_lights.clear()
+	for k in range(8):
+		var omni := OmniLight3D.new()
+		omni.light_color = Color(1.0, 0.82, 0.62)
+		omni.light_energy = 0.0
+		omni.omni_range = 16.0
+		omni.omni_attenuation = 1.4
+		omni.shadow_enabled = false
+		add_child(omni)
+		lamp_lights.append(omni)
+
+	# --- Skid marks: a pool of dark quads laid on the asphalt during drifts.
+	var skid_mesh := PlaneMesh.new()
+	skid_mesh.size = Vector2(0.34, 1.5)
+	var skid_mat := StandardMaterial3D.new()
+	skid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	skid_mat.albedo_color = Color(0.02, 0.02, 0.02, 0.5)
+	skid_mat.roughness = 1.0
+	skid_mesh.material = skid_mat
+	for s in range(48):
+		var mi := MeshInstance3D.new()
+		mi.mesh = skid_mesh
+		mi.visible = false
+		mi.position = Vector3(0, -50, 0)
+		add_child(mi)
+		skid_pool.append(mi)
+
+	# --- Rooftop aircraft-warning beacons on the tallest towers.
+	var beacon_mesh := BoxMesh.new()
+	beacon_mesh.size = Vector3(1.1, 1.1, 1.1)
+	var beacon_mat := StandardMaterial3D.new()
+	beacon_mat.emission_enabled = true
+	beacon_mat.emission = Color(3.2, 0.16, 0.16)
+	beacon_mat.emission_energy_multiplier = 1.0
+	beacon_mat.albedo_color = Color(0.05, 0.02, 0.02)
+	beacon_mm = MultiMesh.new()
+	beacon_mm.transform_format = MultiMesh.TRANSFORM_3D
+	beacon_mm.mesh = beacon_mesh
+	beacon_mm.instance_count = 40
+	var beacon_holder := MultiMeshInstance3D.new()
+	beacon_holder.multimesh = beacon_mm
+	add_child(beacon_holder)
+
+	# --- Damage smoke: a few rising quads that fade in above 50% damage.
+	var smoke_mesh := SphereMesh.new()
+	smoke_mesh.radius = 0.5
+	smoke_mesh.height = 0.9
+	var smoke_mat := StandardMaterial3D.new()
+	smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smoke_mat.albedo_color = Color(0.06, 0.06, 0.07, 0.0)
+	smoke_mat.roughness = 1.0
+	smoke_mesh.material = smoke_mat
+	for m in range(14):
+		var mi := MeshInstance3D.new()
+		mi.mesh = smoke_mesh
+		mi.visible = false
+		mi.position = Vector3(0, -50, 0)
+		var own := smoke_mat.duplicate()
+		mi.material_override = own
+		own.albedo_color.a = 0.0
+		add_child(mi)
+		smoke_pool.append(mi)
+		smoke_age.append(99.0)
+		smoke_base.append(Vector3.ZERO)
+
+	# Place beacons on a deterministic set of tall rooftops near city center.
+	var placed := 0
+	for cz in range(-3, 4):
+		for cx in range(-3, 4):
+			if placed >= 40:
+				break
+			var bx := float(cx) * 512.0 - 128.0 + rng.randf_range(-20.0, 20.0)
+			var bz := float(cz) * 512.0 - 128.0 + rng.randf_range(-20.0, 20.0)
+			var bh := rng.randf_range(46.0, 78.0)
+			beacon_mm.set_instance_transform(placed, Transform3D(Basis(), Vector3(bx, bh, bz)))
+			placed += 1
+			if placed >= 40:
+				break
 
 
 func _spawn_buildings(windows: ImageTexture = null) -> void:
@@ -1694,7 +1952,8 @@ func _spawn_pedestrians() -> void:
 			"x": 0.0, "z": 0.0, "axis": "z",
 			"speed": rng.randf_range(0.9, 2.1),
 			"dir": 1.0 if rng.randf() < 0.5 else -1.0,
-			"phase": rng.randf_range(0.0, TAU)
+			"phase": rng.randf_range(0.0, TAU),
+			"down": -999.0
 		})
 		_recycle_pedestrian(i, true)
 		pedestrian_body_mm.set_instance_color(i, coats[i % coats.size()])
@@ -1782,6 +2041,7 @@ func _build_night_sky() -> void:
 	var star_holder := MultiMeshInstance3D.new()
 	star_holder.multimesh = star_mm
 	add_child(star_holder)
+	star_holder_node = star_holder
 	for i in range(STAR_COUNT):
 		var angle := rng.randf_range(0.0, TAU)
 		var height := rng.randf_range(75.0, 255.0)
@@ -1805,6 +2065,7 @@ func _build_night_sky() -> void:
 	var cloud_holder := MultiMeshInstance3D.new()
 	cloud_holder.multimesh = cloud_mm
 	add_child(cloud_holder)
+	cloud_holder_node = cloud_holder
 	for i in range(CLOUD_COUNT):
 		cloud_offsets.append(Vector3(
 			rng.randf_range(-270.0, 270.0),
