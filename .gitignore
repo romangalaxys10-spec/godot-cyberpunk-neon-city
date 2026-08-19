@@ -4,9 +4,17 @@
 
 # Build artifacts
 build/
-export/
 *.pck
 *.wasm
+
+# Web export (GitHub Pages playable build) - DO NOT ignore
+!export/
+!export/index.html
+!export/index.js
+!export/index.pck
+!export/index.wasm
+!export/*.png
+!export/*.js
 
 # Operating System Files
 .DS_Store
