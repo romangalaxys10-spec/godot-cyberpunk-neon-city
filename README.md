@@ -1,6 +1,6 @@
 # 🌆 Cyberpunk Neon City 3D: Next-Gen Open-World Driving Simulator
 
-[![Play in Browser](https://img.shields.io/badge/Play%20Online-Vercel%20Live-brightgreen?style=for-the-badge&logo=vercel)](https://godot-cyberpunk-city.vercel.app)
+[![Play in Browser](https://img.shields.io/badge/Play%20Online-Vercel%20Live-brightgreen?style=for-the-badge&logo=vercel)](https://godot-cyberpunk-city-ryzenadvanceds-projects.vercel.app)
 [![Godot Engine](https://img.shields.io/badge/Godot%20Engine-4.7%2B-blue?style=for-the-badge&logo=godotengine)](https://godotengine.org)
 [![License](https://img.shields.io/badge/License-MIT-purple?style=for-the-badge)](LICENSE)
 
@@ -10,8 +10,8 @@
 
 ## 🎮 Play Live in Your Browser
 
-Play the game instantly with WebGL/WebAssembly and Cross-Origin Isolation:
-👉 **[godot-cyberpunk-city.vercel.app](https://godot-cyberpunk-city.vercel.app)**
+Play the game instantly with WebGL/WebAssembly:
+👉 **[godot-cyberpunk-city-ryzenadvanceds-projects.vercel.app](https://godot-cyberpunk-city-ryzenadvanceds-projects.vercel.app)**
 
 ---
 
