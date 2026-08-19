@@ -19,8 +19,8 @@ Play the game instantly with WebGL/WebAssembly:
 
 ### 1. Abstract
 The rapid evolution of Large Language Models (LLMs) and Multimodal Visual AI has opened unprecedented paradigms in autonomous game development. This project serves as a practical demonstration of **dual-model neuro-symbolic game synthesis**, where deep architectural reasoning, real-time procedural physics engines, and GPU-level render pipelines are co-designed and implemented using:
-- **GLM-5.3**: Serving as the primary **System Architect & Logic Engine** for core GDScript algorithmic systems, multi-body kinematics, spatial partitioning, Ackermann steering curves, and multi-mesh instance management.
-- **Gemini 3.7 (Vision & Multimodal Intelligence)**: Serving as the **Visual & Material Director**, guiding PBR texture synthesis, normal/roughness map formulations, atmospheric scattering coefficients, and ACES Filmic color-grading curves.
+- **GLM-5.3** did **almost all the work**: the entire 2,392-line `main.gd` — procedural 3.6 km city generation, all vehicle kinematics and Ackermann steering, traffic and pedestrian AI, weather, the cop chase, HUD, audio, and the WebAssembly export pipeline — **as well as the initial procedural texture generators** (asphalt, facades, sidewalks, car carbon, foliage).
+- **Gemini 3.7 Flash** played one focused role: it **enhanced the visual look of the textures** — refining the PBR parameters, normal/roughness maps, and color grading of GLM-5.3's initial texture output. No game logic, no city generation, no gameplay code.
 
 ---
 
@@ -35,11 +35,12 @@ The rapid evolution of Large Language Models (LLMs) and Multimodal Visual AI has
                        ┌────────────────────────┴────────────────────────┐
                        ▼                                                 ▼
         ┌──────────────────────────────┐                  ┌──────────────────────────────┐
-        │       GLM-5.3 Architecture   │                  │     Gemini 3.7 Visual Intel  │
-        │ - Procedural 3.6km City Grid │                  │ - PBR Texture Parameter Gen │
-        │ - 4-Wheel Physics & Drifting │                  │ - ACES Filmic Color Grading  │
-        │ - Animated Pedestrian Agents │                  │ - Atmospheric Fog & Lighting │
-        │ - Dynamic Traffic Pathing    │                  │ - High-Poly Car Styling      │
+        │   GLM-5.3 (ALMOST ALL WORK)  │                  │ Gemini 3.7 Flash (textures)  │
+        │ - Procedural 3.6km City Grid │                  │ - Texture visual enhancement │
+        │ - 4-Wheel Physics & Drifting │                  │ - PBR parameter refinement   │
+        │ - Animated Pedestrian Agents │                  │ - Normal/roughness polish    │
+        │ - Dynamic Traffic Pathing    │                  │ - ACES color-grading advice  │
+        │ - INITIAL TEXTURES + GEN.PY  │                  │   (applied to GLM's output)  │
         └──────────────┬───────────────┘                  └──────────────┬───────────────┘
                        │                                                 │
                        └────────────────────────┬────────────────────────┘
@@ -126,8 +127,8 @@ godot --headless --export-release "Web" build/web/index.html
 
 ## 📜 Credits & Acknowledgments
 - **Core Engine**: Godot Engine 4.7
-- **AI Architecture & Code Synthesis**: GLM-5.3
-- **Vision & Aesthetic Guidance**: Gemini 3.7
+- **AI Architecture & Code Synthesis (almost all work, incl. initial textures)**: GLM-5.3
+- **Texture Visual Enhancement**: Gemini 3.7 Flash
 - **Hosting**: Vercel Edge Network
 
 ---
